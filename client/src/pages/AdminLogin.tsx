@@ -8,8 +8,11 @@ import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogDescription } 
 import { ArrowLeft, Trash2, Plus, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { CATEGORIES } from "@/data/portfolio";
-import { db } from "@/lib/firebase";
-import { collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, getDoc, setDoc } from "firebase/firestore";
+
+// --- FIREBASE IMPORTS ---
+import { db, auth } from "@/lib/firebase"; // Imported auth here
+import { collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore";
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword } from "firebase/auth";
 
 interface Repository {
   id: string;
@@ -23,41 +26,46 @@ interface Repository {
 export default function Admin() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  
+  // Auth State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loading, setLoading] = useState(true); // Loading state for checking auth
+  
+  // Login Inputs
+  const [email, setEmail] = useState(""); // Added Email State
   const [adminPassword, setAdminPassword] = useState("");
+
+  // Dashboard State
   const [repositories, setRepositories] = useState<Repository[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [repoLoading, setRepoLoading] = useState(false);
   const [newRepoOpen, setNewRepoOpen] = useState(false);
   const [manualRepoImage, setManualRepoImage] = useState("");
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
-  const [currentPasswordInput, setCurrentPasswordInput] = useState("");
+  
+  // Change Password State
   const [newPasswordInput, setNewPasswordInput] = useState("");
 
   const [newRepo, setNewRepo] = useState<Partial<Repository>>({
     title: "", description: "", category: "Branding", coverImage: ""
   });
 
+  // 1. Check if user is logged in automatically on load
   useEffect(() => {
-    const adminMode = localStorage.getItem("adminMode") === "true";
-    setIsAuthenticated(adminMode);
-    if (adminMode) {
-      loadRepositories();
-    }
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setIsAuthenticated(true);
+        loadRepositories();
+      } else {
+        setIsAuthenticated(false);
+        setRepositories([]);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
   }, []);
 
-  const getAdminPassword = async () => {
-    try {
-      const settingsRef = doc(db, "settings", "admin");
-      const snap = await getDoc(settingsRef);
-      return snap.exists() ? snap.data().password : "usman2006";
-    } catch (error) {
-      console.error("Error fetching password:", error);
-      return "usman2006";
-    }
-  };
-
   const loadRepositories = () => {
-    setLoading(true);
+    setRepoLoading(true);
     const q = query(collection(db, "repositories"), orderBy("createdAt", "desc"));
     const unsubscribe = onSnapshot(q, 
       (snapshot) => {
@@ -66,31 +74,38 @@ export default function Admin() {
           ...doc.data()
         } as Repository));
         setRepositories(repos);
-        setLoading(false);
+        setRepoLoading(false);
       }
     );
     return unsubscribe;
   };
 
+  // 2. Handle Real Firebase Login
   const handleLogin = async () => {
-    const storedPassword = await getAdminPassword();
-    if (adminPassword === storedPassword) {
-      localStorage.setItem("adminMode", "true");
-      setIsAuthenticated(true);
-      setAdminPassword("");
-      toast({ title: "Success", description: "Admin mode enabled." });
-      loadRepositories();
-    } else {
-      toast({ title: "Error", description: "Invalid password", variant: "destructive" });
+    if (!email || !adminPassword) {
+      toast({ title: "Error", description: "Please enter email and password", variant: "destructive" });
+      return;
+    }
+
+    try {
+      await signInWithEmailAndPassword(auth, email, adminPassword);
+      toast({ title: "Success", description: "Welcome back!" });
+      // onAuthStateChanged will handle the state update
+    } catch (error: any) {
+      console.error(error);
+      toast({ title: "Login Failed", description: "Invalid email or password", variant: "destructive" });
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("adminMode");
-    setIsAuthenticated(false);
-    setAdminPassword("");
-    setLocation("/");
-    toast({ title: "Logged out", description: "Admin mode disabled." });
+  // 3. Handle Logout
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setLocation("/");
+      toast({ title: "Logged out", description: "Admin session ended." });
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    }
   };
 
   const handleAddRepository = async () => {
@@ -128,28 +143,35 @@ export default function Admin() {
     }
   };
 
+  // 4. Handle Real Password Change
   const handleChangePassword = async () => {
-    const storedPassword = await getAdminPassword();
-    if (currentPasswordInput !== storedPassword) {
-      toast({ title: "Error", description: "Current password incorrect.", variant: "destructive" });
+    if (newPasswordInput.length < 6) {
+      toast({ title: "Error", description: "Password must be at least 6 characters.", variant: "destructive" });
       return;
     }
-    if (newPasswordInput.length < 4) {
-      toast({ title: "Error", description: "New password must be at least 4 characters.", variant: "destructive" });
-      return;
-    }
-    try {
-      const settingsRef = doc(db, "settings", "admin");
-      await setDoc(settingsRef, { password: newPasswordInput });
-      toast({ title: "Success", description: "Password updated successfully." });
-      setChangePasswordOpen(false);
-      setCurrentPasswordInput("");
-      setNewPasswordInput("");
-    } catch (error) {
-      toast({ title: "Error", description: "Failed to update password.", variant: "destructive" });
+    
+    const user = auth.currentUser;
+    if (user) {
+      try {
+        await updatePassword(user, newPasswordInput);
+        toast({ title: "Success", description: "Password updated successfully." });
+        setChangePasswordOpen(false);
+        setNewPasswordInput("");
+      } catch (error: any) {
+         // Note: Use usually needs to re-login to change password if session is old
+        toast({ title: "Error", description: "Please logout and login again to change password.", variant: "destructive" });
+      }
     }
   };
 
+  // Loading Screen while checking auth
+  if (loading) {
+    return <div className="min-h-screen bg-background flex items-center justify-center">
+      <Loader2 className="w-8 h-8 animate-spin text-foreground" />
+    </div>
+  }
+
+  // Not Logged In Screen
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-background text-foreground flex items-center justify-center p-4">
@@ -164,81 +186,56 @@ export default function Admin() {
 
           <div className="bg-background/50 border border-white/10 rounded-2xl p-8 backdrop-blur-sm">
             <h1 className="text-3xl font-display font-bold text-foreground mb-2 text-center">Admin Access</h1>
-            <p className="text-muted-foreground text-center mb-8">Enter your password to access admin features</p>
+            <p className="text-muted-foreground text-center mb-8">Enter credentials to access admin features</p>
 
             <div className="space-y-4">
+              {/* Added Email Input */}
+              <div className="grid gap-2">
+                <Label className="text-foreground">Email</Label>
+                <Input 
+                  type="email" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="admin@example.com"
+                  className="bg-background/50 border-white/10 text-foreground"
+                />
+              </div>
+
               <div className="grid gap-2">
                 <Label className="text-foreground">Password</Label>
                 <Input 
                   type="password" 
                   value={adminPassword}
                   onChange={(e) => setAdminPassword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleLogin?.()}
-                  placeholder="Enter admin password"
+                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+                  placeholder="Enter password"
                   className="bg-background/50 border-white/10 text-foreground"
                 />
               </div>
 
               <Button 
-                onClick={() => handleLogin()}
+                onClick={handleLogin}
                 className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
               >
                 Login
               </Button>
-
-              <Button 
-                variant="outline" 
-                onClick={() => setChangePasswordOpen(true)}
-                className="w-full border-white/10"
-              >
-                Change Password
-              </Button>
             </div>
           </div>
-
-          {/* Change Password Dialog */}
-          <Dialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen}>
-            <DialogContent className="sm:max-w-[425px] bg-background border-white/10">
-              <DialogTitle className="text-foreground">Change Admin Password</DialogTitle>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label className="text-foreground">Current Password</Label>
-                  <Input 
-                    type="password" 
-                    value={currentPasswordInput}
-                    onChange={(e) => setCurrentPasswordInput(e.target.value)}
-                    className="bg-background/50 border-white/10 text-foreground"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label className="text-foreground">New Password</Label>
-                  <Input 
-                    type="password" 
-                    value={newPasswordInput}
-                    onChange={(e) => setNewPasswordInput(e.target.value)}
-                    className="bg-background/50 border-white/10 text-foreground"
-                  />
-                </div>
-              </div>
-              <div className="flex justify-end gap-3">
-                <Button variant="outline" onClick={() => setChangePasswordOpen(false)} className="border-white/10">Cancel</Button>
-                <Button onClick={() => handleChangePassword()} className="bg-primary text-primary-foreground hover:bg-primary/90">
-                  Update Password
-                </Button>
-              </div>
-            </DialogContent>
-          </Dialog>
         </div>
       </div>
     );
   }
 
+  // Logged In Dashboard
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl border-b border-white/10">
         <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex justify-between items-center">
           <div className="flex items-center gap-4">
             <h1 className="text-2xl font-display font-bold">Admin Dashboard</h1>
+            <span className="text-xs text-muted-foreground hidden sm:inline-block">
+               {auth.currentUser?.email}
+            </span>
           </div>
 
           <div className="flex gap-2">
@@ -268,7 +265,7 @@ export default function Admin() {
           <p className="text-muted-foreground">Create, edit, and manage your portfolio collections</p>
         </div>
 
-        {loading ? (
+        {repoLoading ? (
           <div className="flex justify-center py-20">
             <Loader2 className="w-8 h-8 animate-spin text-foreground" />
           </div>
@@ -363,7 +360,7 @@ export default function Admin() {
                       <Button 
                         variant="outline"
                         size="sm"
-                        onClick={() => setLocation(`/repo/${repo.id}`)}
+                        onClick={() => setLocation(/repo/${repo.id})}
                         className="border-white/10"
                       >
                         View
@@ -388,15 +385,6 @@ export default function Admin() {
         <DialogContent className="sm:max-w-[425px] bg-background border-white/10">
           <DialogTitle className="text-foreground">Change Admin Password</DialogTitle>
           <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label className="text-foreground">Current Password</Label>
-              <Input 
-                type="password" 
-                value={currentPasswordInput}
-                onChange={(e) => setCurrentPasswordInput(e.target.value)}
-                className="bg-background/50 border-white/10 text-foreground"
-              />
-            </div>
             <div className="grid gap-2">
               <Label className="text-foreground">New Password</Label>
               <Input 
