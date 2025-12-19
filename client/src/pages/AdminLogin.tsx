@@ -357,14 +357,15 @@ export default function Admin() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Button 
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setLocation(/repo/${repo.id})}
-                        className="border-white/10"
-                      >
-                        View
-                      </Button>
+                     <Button 
+  variant="outline"
+  size="sm"
+  onClick={() => setLocation(`/repo/${repo.id}`)}
+  className="border-white/10"
+>
+  View
+</Button>
+
                       <Button 
                         variant="destructive"
                         size="sm"
