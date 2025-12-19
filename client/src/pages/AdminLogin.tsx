@@ -5,13 +5,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { ArrowLeft, Trash2, Plus, Loader2 } from "lucide-react";
+import { ArrowLeft, Trash2, Plus, Loader2, Pencil } from "lucide-react"; // Added Pencil
 import { useToast } from "@/hooks/use-toast";
 import { CATEGORIES } from "@/data/portfolio";
 
-// --- FIREBASE IMPORTS ---
-import { db, auth } from "@/lib/firebase"; // Imported auth here
-import { collection, addDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore";
+import { db, auth } from "@/lib/firebase"; 
+import { collection, addDoc, deleteDoc, updateDoc, doc, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore"; // Added updateDoc
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged, updatePassword } from "firebase/auth";
 
 interface Repository {
@@ -29,27 +28,30 @@ export default function Admin() {
   
   // Auth State
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loading, setLoading] = useState(true); // Loading state for checking auth
-  
-  // Login Inputs
-  const [email, setEmail] = useState(""); // Added Email State
+  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
 
   // Dashboard State
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [repoLoading, setRepoLoading] = useState(false);
+  
+  // Create State
   const [newRepoOpen, setNewRepoOpen] = useState(false);
   const [manualRepoImage, setManualRepoImage] = useState("");
-  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
-  
-  // Change Password State
-  const [newPasswordInput, setNewPasswordInput] = useState("");
-
   const [newRepo, setNewRepo] = useState<Partial<Repository>>({
     title: "", description: "", category: "Branding", coverImage: ""
   });
 
-  // 1. Check if user is logged in automatically on load
+  // Edit State (NEW)
+  const [editingRepo, setEditingRepo] = useState<Repository | null>(null);
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+
+  // Password Change State
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [newPasswordInput, setNewPasswordInput] = useState("");
+
+  // 1. Check Auth
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
@@ -80,37 +82,23 @@ export default function Admin() {
     return unsubscribe;
   };
 
-  // 2. Handle Real Firebase Login
   const handleLogin = async () => {
-    if (!email || !adminPassword) {
-      toast({ title: "Error", description: "Please enter email and password", variant: "destructive" });
-      return;
-    }
-
     try {
       await signInWithEmailAndPassword(auth, email, adminPassword);
       toast({ title: "Success", description: "Welcome back!" });
-      // onAuthStateChanged will handle the state update
     } catch (error: any) {
-      console.error(error);
       toast({ title: "Login Failed", description: "Invalid email or password", variant: "destructive" });
     }
   };
 
-  // 3. Handle Logout
   const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setLocation("/");
-      toast({ title: "Logged out", description: "Admin session ended." });
-    } catch (error: any) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    }
+    await signOut(auth);
+    setLocation("/");
   };
 
   const handleAddRepository = async () => {
     if (!newRepo.title || !manualRepoImage) {
-      toast({ title: "Error", description: "Title and Cover Image URL are required.", variant: "destructive" });
+      toast({ title: "Error", description: "Title and Image are required.", variant: "destructive" });
       return;
     }
     
@@ -126,10 +114,37 @@ export default function Admin() {
       setNewRepo({ title: "", description: "", category: "Branding", coverImage: "" });
       setManualRepoImage("");
       setNewRepoOpen(false);
-      toast({ title: "Success", description: "Repository created." });
+      toast({ title: "Success", description: "Collection created." });
     } catch (error: any) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     }
+  };
+
+  // NEW: Handle Update
+  const handleUpdateRepository = async () => {
+    if (!editingRepo || !editingRepo.title) return;
+
+    try {
+      const docRef = doc(db, "repositories", editingRepo.id);
+      await updateDoc(docRef, {
+        title: editingRepo.title,
+        description: editingRepo.description,
+        category: editingRepo.category,
+        coverImage: editingRepo.coverImage
+      });
+
+      setEditDialogOpen(false);
+      setEditingRepo(null);
+      toast({ title: "Updated", description: "Changes saved successfully." });
+    } catch (error: any) {
+      toast({ title: "Error", description: "Failed to update.", variant: "destructive" });
+    }
+  };
+
+  // NEW: Open Edit Dialog
+  const openEditDialog = (repo: Repository) => {
+    setEditingRepo(repo);
+    setEditDialogOpen(true);
   };
 
   const handleDeleteRepository = async (id: string) => {
@@ -138,272 +153,170 @@ export default function Admin() {
         await deleteDoc(doc(db, "repositories", id));
         toast({ title: "Deleted", description: "Repository removed." });
       } catch (error) {
-        toast({ title: "Error", description: "Failed to delete repository.", variant: "destructive" });
+        toast({ title: "Error", description: "Failed to delete.", variant: "destructive" });
       }
     }
   };
 
-  // 4. Handle Real Password Change
   const handleChangePassword = async () => {
-    if (newPasswordInput.length < 6) {
-      toast({ title: "Error", description: "Password must be at least 6 characters.", variant: "destructive" });
-      return;
-    }
-    
     const user = auth.currentUser;
-    if (user) {
+    if (user && newPasswordInput.length >= 6) {
       try {
         await updatePassword(user, newPasswordInput);
-        toast({ title: "Success", description: "Password updated successfully." });
+        toast({ title: "Success", description: "Password updated." });
         setChangePasswordOpen(false);
-        setNewPasswordInput("");
-      } catch (error: any) {
-         // Note: Use usually needs to re-login to change password if session is old
-        toast({ title: "Error", description: "Please logout and login again to change password.", variant: "destructive" });
+      } catch (error) {
+        toast({ title: "Error", description: "Re-login required to change password.", variant: "destructive" });
       }
     }
   };
 
-  // Loading Screen while checking auth
-  if (loading) {
-    return <div className="min-h-screen bg-background flex items-center justify-center">
-      <Loader2 className="w-8 h-8 animate-spin text-foreground" />
-    </div>
-  }
+  if (loading) return <div className="flex h-screen items-center justify-center"><Loader2 className="animate-spin" /></div>;
 
-  // Not Logged In Screen
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-background text-foreground flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <Button 
-            variant="ghost" 
-            onClick={() => setLocation("/")}
-            className="mb-8 text-muted-foreground hover:text-foreground gap-2"
-          >
-            <ArrowLeft className="w-4 h-4" /> Back to Portfolio
-          </Button>
-
-          <div className="bg-background/50 border border-white/10 rounded-2xl p-8 backdrop-blur-sm">
-            <h1 className="text-3xl font-display font-bold text-foreground mb-2 text-center">Admin Access</h1>
-            <p className="text-muted-foreground text-center mb-8">Enter credentials to access admin features</p>
-
-            <div className="space-y-4">
-              {/* Added Email Input */}
-              <div className="grid gap-2">
-                <Label className="text-foreground">Email</Label>
-                <Input 
-                  type="email" 
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@example.com"
-                  className="bg-background/50 border-white/10 text-foreground"
-                />
-              </div>
-
-              <div className="grid gap-2">
-                <Label className="text-foreground">Password</Label>
-                <Input 
-                  type="password" 
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                  placeholder="Enter password"
-                  className="bg-background/50 border-white/10 text-foreground"
-                />
-              </div>
-
-              <Button 
-                onClick={handleLogin}
-                className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
-              >
-                Login
-              </Button>
-            </div>
+        <div className="w-full max-w-md bg-background/50 border border-white/10 rounded-2xl p-8">
+          <h1 className="text-2xl font-bold mb-6 text-center">Admin Login</h1>
+          <div className="space-y-4">
+            <Input 
+              type="email" 
+              value={email} 
+              onChange={(e) => setEmail(e.target.value)} 
+              placeholder="Email" 
+              className="bg-background/50 border-white/10"
+            />
+            <Input 
+              type="password" 
+              value={adminPassword} 
+              onChange={(e) => setAdminPassword(e.target.value)} 
+              placeholder="Password" 
+              className="bg-background/50 border-white/10"
+            />
+            <Button onClick={handleLogin} className="w-full">Login</Button>
           </div>
         </div>
       </div>
     );
   }
 
-  // Logged In Dashboard
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl border-b border-white/10">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-display font-bold">Admin Dashboard</h1>
-            <span className="text-xs text-muted-foreground hidden sm:inline-block">
-               {auth.currentUser?.email}
-            </span>
-          </div>
-
-          <div className="flex gap-2">
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="text-xs text-muted-foreground hover:text-foreground"
-              onClick={() => setChangePasswordOpen(true)}
-            >
-              Change Password
-            </Button>
-            <Button 
-              variant="outline"
-              size="sm" 
-              className="text-xs border-white/10"
-              onClick={handleLogout}
-            >
-              Logout
-            </Button>
-          </div>
+      {/* Navbar */}
+      <div className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl border-b border-white/10 p-4 flex justify-between">
+        <h1 className="text-xl font-bold">Admin Dashboard</h1>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setChangePasswordOpen(true)}>Password</Button>
+          <Button variant="outline" size="sm" onClick={handleLogout}>Logout</Button>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 md:px-6 py-12">
-        <div className="mb-12">
-          <h2 className="text-3xl md:text-4xl font-display font-bold mb-4">Manage Collections</h2>
-          <p className="text-muted-foreground">Create, edit, and manage your portfolio collections</p>
+      <div className="max-w-7xl mx-auto p-4 md:p-12">
+        <div className="flex justify-between items-center mb-8">
+          <h2 className="text-3xl font-bold">Collections</h2>
+          <Dialog open={newRepoOpen} onOpenChange={setNewRepoOpen}>
+            <DialogTrigger asChild>
+              <Button className="gap-2"><Plus className="w-4 h-4" /> New Collection</Button>
+            </DialogTrigger>
+            <DialogContent className="bg-background border-white/10">
+              <DialogTitle>Create Collection</DialogTitle>
+              <div className="grid gap-4 py-4">
+                <Input placeholder="Title" value={newRepo.title} onChange={(e) => setNewRepo({...newRepo, title: e.target.value})} className="bg-background/50 border-white/10"/>
+                <select className="flex h-10 w-full rounded-md border border-white/10 bg-background/50 px-3" value={newRepo.category} onChange={(e) => setNewRepo({...newRepo, category: e.target.value})}>
+                  {CATEGORIES.filter(c => c !== 'All').map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                <Input placeholder="Image URL" value={manualRepoImage} onChange={(e) => setManualRepoImage(e.target.value)} className="bg-background/50 border-white/10"/>
+                <Textarea placeholder="Description" value={newRepo.description} onChange={(e) => setNewRepo({...newRepo, description: e.target.value})} className="bg-background/50 border-white/10"/>
+                <Button onClick={handleAddRepository}>Create</Button>
+              </div>
+            </DialogContent>
+          </Dialog>
         </div>
 
-        {repoLoading ? (
-          <div className="flex justify-center py-20">
-            <Loader2 className="w-8 h-8 animate-spin text-foreground" />
-          </div>
-        ) : (
-          <>
-            <Dialog open={newRepoOpen} onOpenChange={setNewRepoOpen}>
-              <DialogTrigger asChild>
-                <Button className="mb-12 bg-primary text-primary-foreground hover:bg-primary/90 gap-2">
-                  <Plus className="w-4 h-4" /> Create New Collection
+        {/* List Repos */}
+        <div className="space-y-4">
+          {repositories.map((repo) => (
+            <div key={repo.id} className="bg-background/50 border border-white/10 rounded-lg p-6 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <img src={repo.coverImage} alt={repo.title} className="w-16 h-16 rounded object-cover" />
+                <div>
+                  <h3 className="font-bold">{repo.title}</h3>
+                  <p className="text-sm text-muted-foreground">{repo.category}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setLocation(/repo/${repo.id})}>View</Button>
+                
+                {/* Edit Button */}
+                <Button variant="secondary" size="sm" onClick={() => openEditDialog(repo)}>
+                  <Pencil className="w-4 h-4" />
                 </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-[500px] bg-background border-white/10 max-h-[90vh] overflow-y-auto">
-                <DialogTitle className="text-foreground text-2xl">Create New Collection</DialogTitle>
-                <DialogDescription className="text-muted-foreground">
-                  Collections organize your projects and work.
-                </DialogDescription>
-                <div className="grid gap-6 py-6">
-                  <div className="grid gap-3">
-                    <Label className="text-foreground text-sm font-medium">Collection Title *</Label>
-                    <Input 
-                      value={newRepo.title} 
-                      onChange={(e) => setNewRepo({...newRepo, title: e.target.value})}
-                      placeholder="e.g. Brand Identity 2024" 
-                      className="bg-background/50 border-white/10 text-foreground"
-                    />
-                  </div>
-                  <div className="grid gap-3">
-                    <Label className="text-foreground text-sm font-medium">Category</Label>
-                    <select 
-                      className="flex h-12 w-full rounded-lg border border-white/10 bg-background/50 px-4 py-2 text-foreground text-sm"
-                      value={newRepo.category}
-                      onChange={(e) => setNewRepo({...newRepo, category: e.target.value})}
-                    >
-                      {CATEGORIES.filter(c => c !== 'All').map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="grid gap-3">
-                    <Label className="text-foreground text-sm font-medium">Cover Image URL *</Label>
-                    <Input 
-                      placeholder="https://example.com/cover-image.jpg" 
-                      value={manualRepoImage}
-                      onChange={(e) => setManualRepoImage(e.target.value)}
-                      className="bg-background/50 border-white/10 text-foreground"
-                    />
-                  </div>
-                  <div className="grid gap-3">
-                    <Label className="text-foreground text-sm font-medium">Description</Label>
-                    <Textarea 
-                      value={newRepo.description}
-                      onChange={(e) => setNewRepo({...newRepo, description: e.target.value})}
-                      placeholder="Describe this collection..."
-                      rows={3}
-                      className="bg-background/50 border-white/10 text-foreground resize-none"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end gap-3">
-                  <Button variant="outline" onClick={() => setNewRepoOpen(false)} className="border-white/10">Cancel</Button>
-                  <Button onClick={handleAddRepository} className="bg-primary text-primary-foreground hover:bg-primary/90">Create</Button>
-                </div>
-              </DialogContent>
-            </Dialog>
 
-            <div className="space-y-4">
-              {repositories.length === 0 ? (
-                <div className="bg-background/50 border border-white/10 rounded-lg p-12 text-center">
-                  <p className="text-muted-foreground">No collections yet. Create your first collection to get started.</p>
+                <Button variant="destructive" size="sm" onClick={() => handleDeleteRepository(repo.id)}>
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* EDIT DIALOG */}
+        <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+          <DialogContent className="bg-background border-white/10">
+            <DialogTitle>Edit Collection</DialogTitle>
+            {editingRepo && (
+              <div className="grid gap-4 py-4">
+                <div className="space-y-2">
+                  <Label>Title</Label>
+                  <Input 
+                    value={editingRepo.title} 
+                    onChange={(e) => setEditingRepo({...editingRepo, title: e.target.value})} 
+                    className="bg-background/50 border-white/10"
+                  />
                 </div>
-              ) : (
-                repositories.map((repo) => (
-                  <div 
-                    key={repo.id}
-                    className="bg-background/50 border border-white/10 rounded-lg p-6 flex items-center justify-between hover:border-white/20 transition-colors"
+                <div className="space-y-2">
+                  <Label>Category</Label>
+                  <select 
+                    className="flex h-10 w-full rounded-md border border-white/10 bg-background/50 px-3 text-sm" 
+                    value={editingRepo.category} 
+                    onChange={(e) => setEditingRepo({...editingRepo, category: e.target.value})}
                   >
-                    <div className="flex-1 flex items-center gap-6">
-                      <img 
-                        src={repo.coverImage} 
-                        alt={repo.title}
-                        className="w-24 h-24 rounded-lg object-cover border border-white/10"
-                      />
-                      <div className="flex-1">
-                        <h3 className="text-lg font-display font-bold text-foreground mb-1">{repo.title}</h3>
-                        <p className="text-sm text-muted-foreground mb-2">{repo.description}</p>
-                        <span className="inline-block px-3 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium">
-                          {repo.category}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                     <Button 
-  variant="outline"
-  size="sm"
-  onClick={() => setLocation(`/repo/${repo.id}`)}
-  className="border-white/10"
->
-  View
-</Button>
+                    {CATEGORIES.filter(c => c !== 'All').map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Image URL</Label>
+                  <Input 
+                    value={editingRepo.coverImage} 
+                    onChange={(e) => setEditingRepo({...editingRepo, coverImage: e.target.value})} 
+                    className="bg-background/50 border-white/10"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Description</Label>
+                  <Textarea 
+                    value={editingRepo.description} 
+                    onChange={(e) => setEditingRepo({...editingRepo, description: e.target.value})} 
+                    className="bg-background/50 border-white/10"
+                  />
+                </div>
+                <Button onClick={handleUpdateRepository}>Save Changes</Button>
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
-                      <Button 
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => handleDeleteRepository(repo.id)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))
-              )}
+        {/* Change Password Dialog */}
+        <Dialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen}>
+          <DialogContent className="bg-background border-white/10">
+            <DialogTitle>Change Password</DialogTitle>
+            <div className="grid gap-4 py-4">
+              <Input type="password" placeholder="New Password" value={newPasswordInput} onChange={(e) => setNewPasswordInput(e.target.value)} className="bg-background/50 border-white/10"/>
+              <Button onClick={handleChangePassword}>Update</Button>
             </div>
-          </>
-        )}
+          </DialogContent>
+        </Dialog>
       </div>
-
-      <Dialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen}>
-        <DialogContent className="sm:max-w-[425px] bg-background border-white/10">
-          <DialogTitle className="text-foreground">Change Admin Password</DialogTitle>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label className="text-foreground">New Password</Label>
-              <Input 
-                type="password" 
-                value={newPasswordInput}
-                onChange={(e) => setNewPasswordInput(e.target.value)}
-                className="bg-background/50 border-white/10 text-foreground"
-              />
-            </div>
-          </div>
-          <div className="flex justify-end gap-3">
-            <Button variant="outline" onClick={() => setChangePasswordOpen(false)} className="border-white/10">Cancel</Button>
-            <Button onClick={handleChangePassword} className="bg-primary text-primary-foreground hover:bg-primary/90">
-              Update Password
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
